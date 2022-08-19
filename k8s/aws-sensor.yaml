@@ -1,0 +1,88 @@
+apiVersion: argoproj.io/v1alpha1
+kind: Sensor
+metadata:
+  name: aws
+  namespace: argo-events
+spec:
+  template:
+    serviceAccountName: ankur-argo-events-sensor-sa
+  dependencies:
+    - name: sns
+      eventSourceName: aws-sns
+      eventName: example
+      transform: # jq is super confusing!! First we save the body as a parameter, because we need it later. Then,
+        # we use fromjson to convert .body.Message, a string to json, so we can extract .message from it.
+        # we set the .message string to our custom string, and add a new field called Timestamp and set the value
+        # of this field to the original Timestamp from the body. There could be better ways to do this!
+        jq: ".body as $parent | .body.Message | fromjson | .message |= \"added by sns sensor transform\" |.Timestamp |= $parent.Timestamp
+        |.debug_mode |= 1"
+      jsonBody: true
+      filters:
+        exprs:
+          - expr: e == "David"
+            fields:
+              - name: e
+                path: author
+    - name: sqs
+      eventSourceName: aws-sqs
+      eventName: example
+      transform:
+        jq: ".body.message = \"added by sqs sensor transform\""
+      jsonBody: true
+      filters:
+        exprs:
+          - expr: e == "Ankur"
+            fields:
+              - name: e
+                path: messageAttributes.Author.StringValue
+            # template: "{{ b64dec .Input }}"
+
+  triggers:
+    - template:
+        conditions: "sns"
+        name: aws-sns-workflow-trigger
+        http:
+          url: http://http-server-svc.argo-events:8000/event/
+          payload:
+            - dest: data
+              src:
+                dependencyName: sns
+          retryStrategy:
+            steps: 2
+            duration: 2s
+            policy:
+              status:
+                allow:
+                  - 200
+                  - 201
+          method: POST
+    - template:
+        conditions: "sqs"
+        name: aws-sqs-workflow-trigger
+        k8s:
+          operation: create
+          source:
+            resource:
+              apiVersion: batch/v1
+              kind: Job
+              metadata:
+                namespace: argo-events-test
+                generateName: hello-world-
+                labels:
+                  type: aws-sqs-trigger-job
+              spec:
+                template:
+                  spec:
+                    containers:
+                      - name: app
+                        args:
+                          - "dummy"
+                        image: "ankur6ue/sqs_trigger_app"
+                        env:
+                          - name: DEBUG_MODE
+                            value: "1"
+                    restartPolicy: Never
+          parameters:
+            - src:
+                dependencyName: sqs
+              dest: spec.template.spec.containers.0.args.0

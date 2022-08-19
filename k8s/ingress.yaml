@@ -1,0 +1,26 @@
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: aws-sns-event-source-ingress
+  namespace: argo-events
+  annotations: # This is needed!
+    nginx.ingress.kubernetes.io/rewrite-target: /$2
+spec:
+  ingressClassName: nginx
+  rules:
+  - http:
+      paths:
+      - path: /aws-sns-source(/|$)(.*)
+        pathType: Prefix
+        backend:
+          service:
+            name: aws-sns-eventsource-svc
+            port:
+              number: 12000
+      - path: /mysql(/|$)(.*)
+        pathType: Prefix
+        backend:
+          service:
+            name: mysql
+            port:
+              number: 3306

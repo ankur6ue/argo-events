@@ -1,0 +1,28 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: http-server-svc
+  namespace: argo-events
+spec:
+  ports:
+  - port: 8000
+  selector:
+    app: http-server
+  clusterIP: None
+
+---
+
+kind: Pod
+apiVersion: v1
+metadata:
+  name: http-server
+  namespace: argo-events
+  labels:
+    app: http-server
+spec:
+  containers:
+    - name: http-server
+      image: ankur6ue/sns_trigger_app
+      imagePullPolicy: Always
+      ports:
+        - containerPort: 8000

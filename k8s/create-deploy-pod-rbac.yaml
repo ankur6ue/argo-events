@@ -1,0 +1,44 @@
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: ankur-argo-events-sensor-sa
+  namespace: argo-events
+
+---
+# Create a role that allows creation of jobs and pods in argo-events-test namespace
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  namespace: argo-events-test
+  name: create-deploy-pod-role
+rules:
+  - apiGroups:
+      - ""
+    resources:
+      - pods
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  - apiGroups:
+      - "batch"
+    resources:
+      - jobs
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+
+---
+# This role binding attaches the role above to the ankur-argo-events-sensor-sa in the argo-events namespace. The
+# rolebinding itself lives in the argo-events-test namespace
+kind: RoleBinding
+apiVersion: rbac.authorization.k8s.io/v1
+metadata:
+  name: create-deploy-pod-rb
+  namespace: argo-events-test
+subjects:
+- kind: ServiceAccount
+  name: ankur-argo-events-sensor-sa
+  namespace: argo-events
+  apiGroup: ""
+roleRef:
+  kind: Role
+  name: create-deploy-pod-role
+  apiGroup: rbac.authorization.k8s.io
+
+
