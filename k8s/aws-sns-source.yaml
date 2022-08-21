@@ -14,7 +14,7 @@ spec:
       # filter: # filter field
       #  expression: "(body.Message.id == '5')"
       # arn of SNS topic
-      topicArn:
+      topicArn: arn:aws:sns:us-east-1:549836289368:test
       # hook contains configuration for the HTTP server running in the event-source.
       # AWS will send events to following port and endpoint
       webhook:
@@ -29,7 +29,7 @@ spec:
         # The event-source pod is backed by the service defined in the event-source spec. So get the URL for that service AWS can reach to.
         # The name for the service is in `<event-source-name>-eventsource-svc` format.
         # You will need to create an Ingress or Openshift Route for the event-source service so that it can be reached from AWS.
-        url: 
+        url: http://afed4ce0f9cd543648f9ab5a85bed917-474376618.us-east-1.elb.amazonaws.com/aws-sns-source
 
       # accessKey contains information about K8s secret that stores the access key
       accessKey:

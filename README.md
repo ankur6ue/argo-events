@@ -38,7 +38,42 @@ This project is based on the following set up:
 
 ### Setup
 #### SQS and SNS
-Log into AWS console and create a SQS queue and a SNS topic with default settings. We'll use the AWS credentials associated with the user profile used to create these resources to communicate with them. 
+Log into AWS console and create a SQS queue and a SNS topic with default settings. In the next step, we'll use the AWS credentials associated with the user profile used to create these resources (or a profile with the proper access to these resources) to create a Kubernetes secret 
+
+#### Creating a Kubernetes Secret containing your user credentials
+Follow instructions [here](https://argoproj.github.io/argo-events/eventsources/setup/aws-sqs/) to create a kubernetes Secret containing your AWS account access and secret key. You'll need to base64 encode the keys, which can be done using a command line tool, or using this [web tool](https://www.base64encode.org/)
+```commandline
+
+```
+#### Set up SQS and SNS event source
+The SQS an SNS event source custom resource are defined in k8s/aws-sns-source.yaml and k8s/aws-sqs-source.yaml. Add your SQS queue name (not the full ARN) to the queue field in the SQS source config, and the SNS topic ARN to the topicARN field. Run kubectl apply as shown below
+```commandline
+kubectl apply -f k8s/aws-sns-source.yaml -n argo-events
+kubectl apply -f k8s/aws-sqs-source.yaml -n argo-events
+```
+
+Now run 
+```commandline
+kubectl get pods -n argo-events
+```
+You'll see pods for the SQS and SNS event source. If you run `kubectl get svc -n argo-events`, you'll see the SNS pod has been exposed as a service. The name for the service is in <event-source-name>-eventsource-svc format. 
+This is done because the SNS source must expose an internet facing endpoint that can be called by SNS. To expose the service to the internet, run 
+```commandline
+kubectl apply -f k8s/ingress.yaml -n argo-events
+``` 
+This will create an ingress that will expose your service to the internet on `your_cluster_elb_address/aws-sns-source`. The other section in the ingress config exposes a mysql service to the internet, which we haven't created yet. 
+
+You can get your ELB address by running `kubectl get ingress -n argo-events`
+Now, replace the `url` field in `aws-sns-source.yaml` with `your_cluster_elb_address/aws-sns-source` and apply the change. During subscription, The SNS event source provides the address of the internet facing endpoint to AWS SNS which is used by SNS to verify the subscription. Now if you go to the AWS SNS console, you should see a verified subscription. The SQS event source polls for new messages on the queue, and is not associated with a service. 
+
+Note that the SQS event applies a source filter which only selects messages where body.id == 4. The `jsonBody: true` statement instructs the event source to interpret the body of message as JSON. 
+
+Now try sending a JSON formatted SQS message/SNS notification using the AWS console and check the logs for the event source pod using `kubectl logs <pod_name> -n argo-events`. You should see some info about the message you sent using the console in the logs if the setup is working correctly. 
+
+### Building docker images for event triggers
+Next, we'll build the docker images used in the event triggers triggered by the SNS and SQS event sensors. The code for the event triggers are in the `sns-trigger-app` and `sqs-trigger-app` folders respectively. The 
+
+
 
 
 ### Prometheus setup
