@@ -1,4 +1,4 @@
-(Argo Events)[https://argoproj.github.io/argo-events/] is an event-driven workflow automation framework for Kubernetes which helps you trigger K8s objects, Argo Workflows, Serverless workloads, etc. on events from a variety of sources like webhooks, S3, schedules, messaging queues, gcp pubsub, sns, sqs, etc.
+[Argo Events](https://argoproj.github.io/argo-events/) is an event-driven workflow automation framework for Kubernetes which helps you trigger K8s objects, Argo Workflows, Serverless workloads, etc. on events from a variety of sources like webhooks, S3, schedules, messaging queues, gcp pubsub, sns, sqs, etc.
 This project demonstrates the following features:
 - Installing argo events on a Kubernetes cluster set up by kops on AWS
 - Setting up AWS SQS and SNS event sources, with event filtering
@@ -12,7 +12,7 @@ The information recorded in the database includes the time when the event (SQS m
 
 ## System Architecture
 The overall system architecture is shown below with some system components marked with numerals. I'll be using the numerals to refer to those components in the description henceforth. 
-![](system_architecture)
+![](images/system_architecture)
 
 Our test script (load_test.py (#1)) creates a list of 2400 JSON formatted message strings with the following format:
 ```json
@@ -71,7 +71,70 @@ Note that the SQS event applies a source filter which only selects messages wher
 Now try sending a JSON formatted SQS message/SNS notification using the AWS console and check the logs for the event source pod using `kubectl logs <pod_name> -n argo-events`. You should see some info about the message you sent using the console in the logs if the setup is working correctly. 
 
 ### Building docker images for event triggers
-Next, we'll build the docker images used in the event triggers triggered by the SNS and SQS event sensors. The code for the event triggers are in the `sns-trigger-app` and `sqs-trigger-app` folders respectively. The 
+Next, we'll build the docker images used in the event triggers triggered by the SNS and SQS event sensors. The code for the event triggers are in the `sns-trigger-app` and `sqs-trigger-app` folders respectively. The sns trigger runs a kubernetes job that connects to a mysql database and adds a record in the database with the event info. The sqs trigger POSTs the event info to a web service with a single endpoint. The endpoint handler parses the body of the request and adds a record in the mysql database. The event creation time and database record creation time are also recorded, which are used to measure the lag in the event processing pipeline, as mentioned above. The implementation is fairly straightforward. Note that the event creation and record creation time must be in the same time zone. Because I can't be sure of the time zone of the EC2 instance where the triggers run, I convert the record creation time to eastern time zone, where my test script is running. 
+
+To build the trigger docker images, you can use build_trigger.sh, which calls the build_push.sh scripts in sns-trigger-app and sqs-trigger-app folders. Before running the script, you should change dockerhub userid in the image name to your user id.
+
+### Running mysql pod and service
+The events that pass source and sensor filtering are recorded in a mysql database. To set it up, do the following
+- Create the persistent volume and claim needed by the database:
+```commandline
+kubectl apply -f k8s/mysql-pv.yaml
+```
+- Create the mysql deployment and service
+```commandline
+kubectl apply -f mysql.yaml
+```
+To check if the db set up is working, you can run a mysql client and connect to the database
+```commandline
+kubectl run -it --rm --image=mysql:5.6 -n argo-events --restart=Never mysql-client -- mysql -h mysql -ppassword -uroot
+```
+You can also use port forwarding to access the mysql pod directly from your workstation. This lets you use an IDE such as Pycharm to interact with the database, which is a much easier user experience. 
+```commandline
+ kubectl port-forward -n argo-events <my-sql-podname> 27018:3306
+```
+If you are using Pycharm, use the settings shown in this screenshot to connect with the database:
+![](images/pycharm_db_conn_screenshot)
+
+Using one of the sql clients, connect to the database server and create a database and table with the following schema:
+```sql
+CREATE DATABASE IF NOT EXISTS argo_event_record_db;
+USE argo_event_record_db;
+DROP TABLE argo_event_record;
+CREATE TABLE IF NOT EXISTS argo_event_record(
+  Id      INT     NOT NULL   AUTO_INCREMENT    PRIMARY KEY,
+  PayloadId INT,
+  EventType TEXT,
+  CustomMessage TEXT,
+  Author VARCHAR(255),
+  EventTimestamp Timestamp(3), # the (3) ensures we are capturing milisecond level info
+  CreatedAtTimestamp Timestamp(3)
+);
+```
+### RBAC for the Kubernetes job created by SQS event sensor
+One of the issues we want to verify in this project is the ability to create a Kubernetes resource in a different namespace from where the argo-events pods are running. The obvious choice for this resource is the job triggered by SQS events. To do so, we create a namespace called `argo-events-test`
+```sql
+kubectl create namespace argo-events-test
+```
+Then you can run `kubectl apply -f k8s\create-deploy-pod-rbac.yaml`. This creates a new service account (change the name as appropriate), a role that enables CRUD operations on pods and jobs in the `argo-events-test` namespace, and a rolebinding that binds the new service account to this role, but itself lives in the `argo-events-test` namespace. This configuration is 'least privilege' because it only gives our new service account a specific set of permissions in a specific namespace, and no more. 
+Read [this](https://kubernetes.io/docs/reference/access-authn-authz/rbac/) if you are unfamiliar with RBAC on kubernetes, 
+### Setting up SQS and SNS event sensor
+Next, we'll set up our event sensor. I've included both the SQS and SNS sensor configurations in the same yaml file (aws-sensor.yaml) to show that you can include multiple sensors in the same yaml file. 
+
+There are two parts to configuring a sensor. The first part is called event dependency and is related to specifying the event source the sensor responds to. You can also also specify event transformations (using JQ or Lua) and filtering in this section. The event transformation is applied before the filtering stage. 
+The second part is called event trigger and specifies the action that should take place in response to an event that passes the filtering stage. These triggers can include triggering an argo workflow, AWS lambda, HTTP request, Kubernetes object and several others. See [this](https://argoproj.github.io/argo-events/sensors/transform/) for a complete list. 
+
+For the SQS sensor, the transformation step consists of modifying the message field in the event body and the filtering step filters on the author field of the SQS MessageAttributes (see load_test.py for the SQS message format). Note that we set jsonBody field Events that pass the filtering stage trigger a Kubernetes job in the argo-events-test namespace. The message info is passed as an argument to the container in the job spec. The kubernetes job parses the message info and adds a record in a table in the mysql database. 
+
+For the SNS sensor, the transformation step is more complex. Unlike the SQS message that includes the message creation timestamp in the MessageAttributes field, the SNS message doesn't contain the message creation timestamp. Instead, we rely on the timestamp inserted by AWS SNS in the message body and copy this timestamp to the Message.Timestamp field. This also demonstrates that the event transformation mechanism can be used to insert a new field in the message body. 
+The filtering step is similar to the SQS sensor. We filter on the author field of the message body. 
+
+
+
+It listens to events on the eventbus and acts as an event dependency manager to resolve and execute the triggers.
+
+
+
 
 
 
